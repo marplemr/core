@@ -119,4 +119,6 @@ type Config interface {
 	UUIDPath() string
 	// ETH returns ethereum configuration
 	ETH() *accounts.EthConfig
+	// LocatorEndpoint returns locator endpoint.
+	LocatorEndpoint() string
 }

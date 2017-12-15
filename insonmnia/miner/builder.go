@@ -23,14 +23,15 @@ var (
 )
 
 type MinerBuilder struct {
-	ctx      context.Context
-	cfg      Config
-	hardware hardware.HardwareInfo
-	nat      stun.NATType
-	ovs      Overseer
-	uuid     string
-	ssh      SSH
-	key      *ecdsa.PrivateKey
+	ctx           context.Context
+	cfg           Config
+	hardware      hardware.HardwareInfo
+	nat           stun.NATType
+	ovs           Overseer
+	uuid          string
+	ssh           SSH
+	key           *ecdsa.PrivateKey
+	locatorClient pb.LocatorClient
 }
 
 func (b *MinerBuilder) Context(ctx context.Context) *MinerBuilder {
@@ -119,6 +120,15 @@ func (b *MinerBuilder) Build() (miner *Miner, err error) {
 
 	hubAddr, hubEthAddr, err := util.ParseEndpoint(b.cfg.HubEndpoint())
 	if err != nil {
+		// No sockaddr provided, try to resolve hub address via locator.
+		repl, err := b.locatorClient.Resolve(b.ctx, &pb.ResolveRequest{b.cfg.HubEndpoint()})
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve hub address: %s", err)
+		}
+
+		for _, addr := range repl.GetIpAddr() {
+			hubCC, err := util.MakeWalletAuthenticatedClient(b.ctx, creds, addr)
+		}
 		return nil, err
 	}
 
@@ -230,8 +240,27 @@ func makeCgroupManager(cfg *ResourcesConfig) (cGroup, cGroupManager, error) {
 	return newCgroupManager(cfg.Cgroup, cfg.Resources)
 }
 
-func NewMinerBuilder(cfg Config, key *ecdsa.PrivateKey) MinerBuilder {
-	b := MinerBuilder{key: key}
+func NewMinerBuilder(cfg Config, key *ecdsa.PrivateKey) (*MinerBuilder, error) {
+	b := &MinerBuilder{key: key}
 	b.Config(cfg)
-	return b
+
+	if b.ctx == nil {
+		b.ctx = context.Background()
+	}
+
+	_, TLSConf, err := util.NewHitlessCertRotator(b.ctx, b.key)
+	if err != nil {
+		return nil, err
+	}
+
+	creds := util.NewTLS(TLSConf)
+
+	locatorCC, err := util.MakeWalletAuthenticatedClient(b.ctx, creds, cfg.LocatorEndpoint())
+	if err != nil {
+		return nil, err
+	}
+
+	b.locatorClient = pb.NewLocatorClient(locatorCC)
+
+	return b, nil
 }
